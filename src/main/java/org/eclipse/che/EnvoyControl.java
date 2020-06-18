@@ -89,13 +89,22 @@ public class EnvoyControl {
         startEnvoyManager(cache);
 
         ScheduledExecutorService configLoad = Executors.newSingleThreadScheduledExecutor();
-        configLoad.schedule(() -> {
-            try {
-                if (serversFile.exists()) {
-                    loadConfig(cache, serversPath);
+        configLoad.schedule(new Runnable() {
+            long lastModified = 0;
+
+            @Override
+            public void run() {
+                try {
+                    if (serversFile.exists()) {
+                        long currentModified = serversFile.lastModified();
+                        if (lastModified == 0 || lastModified != currentModified) {
+                            loadConfig(cache, serversPath);
+                            lastModified = currentModified;
+                        }
+                    }
+                } catch (Exception e) {
+                    LOG.error(format("Failed to load the config from file '%s': %s", serversFile, e.getMessage()));
                 }
-            } catch (Exception e) {
-                LOG.error(format("Failed to load the config from file '%s': %s", serversFile, e.getMessage()));
             }
         }, 100, TimeUnit.MILLISECONDS);
     }
