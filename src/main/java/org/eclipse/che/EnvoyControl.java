@@ -81,9 +81,7 @@ public class EnvoyControl {
         }
 
         File serversFile = new File(args[0]);
-        if (!serversFile.exists()) {
-            throw new IllegalArgumentException(format("The provided CSV file, '%s', doesn't exist.", serversFile.getAbsolutePath()));
-        }
+        Path serversPath = serversFile.toPath();
 
         SimpleCache<String> cache = new SimpleCache<>(node -> GROUP);
         cache.setSnapshot(GROUP, initialSnapshot());
@@ -91,7 +89,15 @@ public class EnvoyControl {
         startEnvoyManager(cache);
 
         ScheduledExecutorService configLoad = Executors.newSingleThreadScheduledExecutor();
-        configLoad.schedule(() -> loadConfig(cache, serversFile.toPath()), 100, TimeUnit.MILLISECONDS);
+        configLoad.schedule(() -> {
+            try {
+                if (serversFile.exists()) {
+                    loadConfig(cache, serversPath);
+                }
+            } catch (Exception e) {
+                LOG.error(format("Failed to load the config from file '%s': %s", serversFile, e.getMessage()));
+            }
+        }, 100, TimeUnit.MILLISECONDS);
     }
 
     private static void loadConfig(SnapshotCache<String> cache, Path serversFile) {
