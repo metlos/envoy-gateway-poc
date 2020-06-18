@@ -1,0 +1,54 @@
+admin:
+  access_log_path: /tmp/admin_access.log
+
+dynamic_resources:
+  cds_config:
+    api_config_source:
+      api_type: GRPC
+      grpc_services:
+        envoy_grpc:
+          cluster_name: che_xds
+
+static_resources:
+  listeners:
+    - name: all_workspaces
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 10000 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.config.filter.network.http_connection_manager.v2.HttpConnectionManager
+                stat_prefix: ingress_http
+                codec_type: AUTO
+                rds:
+                  route_config_name: local_route
+                  config_source:
+                    api_config_source:
+                      api_type: GRPC
+                      grpc_services:
+                        envoy_grpc:
+                          cluster_name: che_xds
+                http_filters:
+                  - name: envoy.filters.http.router
+      clusters:
+        # We need to tell envoy statically where to find our management server. This is then referenced in the
+        # dynamically configured portions of the config.
+        - name: che_xds
+          connect_timeout: 0.25s
+          type: STRICT_DNS
+          lb_policy: ROUND_ROBIN
+          http2_protocol_options: {}
+          upstream_connection_options:
+            # configure a TCP keep-alive to detect and reconnect to the admin
+            # server in the event of a TCP socket half open connection
+            tcp_keepalive: {}
+          load_assignment:
+            cluster_name: che_xds
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: che
+                          port_value: 12345
