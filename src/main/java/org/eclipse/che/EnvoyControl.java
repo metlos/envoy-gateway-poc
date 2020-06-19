@@ -75,13 +75,17 @@ public class EnvoyControl {
 
     public static void main(String[] args) throws Exception {
         if (args.length == 0) {
-            LOG.error("Expecting a single commandline argument with a path to the CSV file" +
-                    " defining the servers.");
+            LOG.error("Expecting at least 1 commandline argument: a path to the CSV file with 'workspaces' and" +
+                    " backend to pass the non-workspace traffic to.");
             System.exit(1);
         }
 
         File serversFile = new File(args[0]);
         Path serversPath = serversFile.toPath();
+
+        String fallbackBackend = args.length > 1 ? args[1] : null;
+
+        LOG.info("Will watch file " + serversFile.getAbsolutePath() + ".");
 
         SimpleCache<String> cache = new SimpleCache<>(node -> GROUP);
         cache.setSnapshot(GROUP, initialSnapshot());
@@ -98,7 +102,7 @@ public class EnvoyControl {
                     if (serversFile.exists()) {
                         long currentModified = serversFile.lastModified();
                         if (lastModified == 0 || lastModified != currentModified) {
-                            loadConfig(cache, serversPath);
+                            loadConfig(cache, serversPath, fallbackBackend);
                             lastModified = currentModified;
                         }
                     }
@@ -109,13 +113,13 @@ public class EnvoyControl {
         }, 100, TimeUnit.MILLISECONDS);
     }
 
-    private static void loadConfig(SnapshotCache<String> cache, Path serversFile) {
+    private static void loadConfig(SnapshotCache<String> cache, Path serversFile, String fallbackBackend) {
         try {
             // the CSV file contains the target hosts as a CSV in the following format:
             // request_path,target_service_dnsname
             List<Cluster> clusters = new ArrayList<>();
             VirtualHost.Builder routes = VirtualHost.newBuilder();
-            routes.setName("workspaces").addDomains("*");
+            routes.setName("backends").addDomains("*");
 
             int[] idx = new int[1];
             Files.lines(serversFile).forEach(line -> {
@@ -130,7 +134,7 @@ public class EnvoyControl {
 
                 String targetService = fields[1];
 
-                String clusterName = "cluster-" + idx[0];
+                String clusterName = "workspace_" + idx[0];
 
                 Cluster cluster = Cluster.newBuilder()
                         .setName(clusterName)
@@ -138,40 +142,53 @@ public class EnvoyControl {
                         .setType(Cluster.DiscoveryType.STRICT_DNS)
                         .setLbPolicy(Cluster.LbPolicy.ROUND_ROBIN)
                         .setLoadAssignment(ClusterLoadAssignment.newBuilder()
+                                .setClusterName(clusterName)
                                 .addEndpoints(LocalityLbEndpoints.newBuilder()
                                         .addLbEndpoints(LbEndpoint.newBuilder()
                                                 .setEndpoint(Endpoint.newBuilder()
                                                         .setAddress(Address.newBuilder()
                                                                 .setSocketAddress(SocketAddress.newBuilder()
-                                                                        .setAddress(targetService)))))))
+                                                                        .setAddress(targetService)
+                                                                        .setPortValue(80)))))))
                         .build();
+                clusters.add(cluster);
 
-
-                routes.addRoutes(Route.newBuilder()
-                        .setMatch(RouteMatch.newBuilder()
-                                .setPrefix(requestPath))
-                        .setRoute(RouteAction.newBuilder()
-                                .setCluster(clusterName)
-                                .setPrefixRewrite("/").build()));
                 routes.addRoutes(Route.newBuilder()
                         .setMatch(RouteMatch.newBuilder()
                                 .setPrefix(requestPathWithSlash))
                         .setRoute(RouteAction.newBuilder()
                                 .setCluster(clusterName)
                                 .setPrefixRewrite("/").build()));
-
-                clusters.add(cluster);
+                routes.addRoutes(Route.newBuilder()
+                        .setMatch(RouteMatch.newBuilder()
+                                .setPrefix(requestPath))
+                        .setRoute(RouteAction.newBuilder()
+                                .setCluster(clusterName)
+                                .setPrefixRewrite("/").build()));
 
                 idx[0]++;
+
+                LOG.info("Adding " + requestPath + ", " + targetService);
             });
 
+            if (fallbackBackend != null) {
+                routes.addRoutes(Route.newBuilder()
+                        .setMatch(RouteMatch.newBuilder()
+                                .setPrefix("/"))
+                        .setRoute(RouteAction.newBuilder()
+                                .setCluster(fallbackBackend)
+                                .setPrefixRewrite("/").build()));
+            }
+
             RouteConfiguration routeConfig = RouteConfiguration.newBuilder()
-                    .setName("workspaces")
+                    .setName("backends")
                     .addVirtualHosts(routes)
                     .build();
 
             cache.setSnapshot(GROUP, Snapshot.create(clusters, emptyList(), emptyList(), List.of(routeConfig),
                     emptyList(), Long.toString(VERSION.getAndIncrement())));
+
+            LOG.info("Config snapshot created.");
         } catch (IOException e) {
             LOG.error("Error while reading the CSV file.", e);
         }
