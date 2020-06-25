@@ -93,8 +93,8 @@ public class EnvoyControl {
         startEnvoyManager(cache);
 
         ScheduledExecutorService configLoad = Executors.newSingleThreadScheduledExecutor();
-        configLoad.schedule(new Runnable() {
-            long lastModified = 0;
+        configLoad.scheduleAtFixedRate(new Runnable() {
+            volatile long lastModified = 0;
 
             @Override
             public void run() {
@@ -102,15 +102,18 @@ public class EnvoyControl {
                     if (serversFile.exists()) {
                         long currentModified = serversFile.lastModified();
                         if (lastModified == 0 || lastModified != currentModified) {
+                            LOG.info("File found modified since the last time it was applied.");
                             loadConfig(cache, serversPath, fallbackBackend);
                             lastModified = currentModified;
                         }
+                    } else {
+                        LOG.info("File {} does not exist.", serversFile.getAbsolutePath());
                     }
                 } catch (Exception e) {
                     LOG.error(format("Failed to load the config from file '%s': %s", serversFile, e.getMessage()));
                 }
             }
-        }, 100, TimeUnit.MILLISECONDS);
+        }, 0, 100, TimeUnit.MILLISECONDS);
     }
 
     private static void loadConfig(SnapshotCache<String> cache, Path serversFile, String fallbackBackend) {
